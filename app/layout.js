@@ -1,4 +1,4 @@
-import AppShell from "@/components/AppShell"
+import ClientAppShell from "@/components/ClientAppShell"
 import "./globals.css"
 
 export const metadata = {
@@ -26,7 +26,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="ko">
       <body className="flex justify-center overflow-hidden antialiased">
-        <AppShell>{children}</AppShell>
+        <ClientAppShell>{children}</ClientAppShell>
       </body>
     </html>
   )

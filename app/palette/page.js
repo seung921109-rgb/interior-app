@@ -3,7 +3,7 @@
 import { Suspense } from "react"
 import ConvertButton from "@/components/ConvertButton"
 import FinishPicker from "@/components/FinishPicker"
-import PreviewStage from "@/components/PreviewStage"
+import PreviewStage from "@/components/ClientPreviewStage"
 import RestoreOriginalButton from "@/components/RestoreOriginalButton"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"

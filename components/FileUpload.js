@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react"
 import { Camera, ImageUp, RefreshCw, Sparkles, WandSparkles } from "lucide-react"
-import PreviewStage from "@/components/PreviewStage"
+import PreviewStage from "@/components/ClientPreviewStage"
 import ResetAreaButton from "@/components/ResetAreaButton"
 import { usePreview } from "@/context/PreviewContext"
 import { pointerToWorkingPoint } from "@/lib/canvas"

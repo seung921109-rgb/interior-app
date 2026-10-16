@@ -1,4 +1,4 @@
-import FileUpload from "@/components/FileUpload"
+import FileUpload from "@/components/ClientFileUpload"
 import WorkArea from "@/components/WorkArea"
 
 export default function UploadPage() {

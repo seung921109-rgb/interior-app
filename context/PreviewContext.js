@@ -17,7 +17,15 @@ import {
   stampBrushSegment,
   unionMask,
 } from "@/lib/mask"
-import { clearSamCache, segmentObjectAtPoint } from "@/lib/pointSegment"
+async function loadPointSegment() {
+  if (typeof window === "undefined") {
+    return {
+      segmentObjectAtPoint: async () => null,
+      clearSamCache() {},
+    }
+  }
+  return import("@/lib/pointSegment")
+}
 import {
   COLOR_TOLERANCE,
   borderBackgroundMask,
@@ -133,6 +141,7 @@ export function PreviewProvider({ children }) {
         const previous = cloneMask(maskRef.current)
         let extra = null
         try {
+          const { segmentObjectAtPoint } = await loadPointSegment()
           extra = await segmentObjectAtPoint(imageData, x, y)
         } catch (error) {
           console.warn("point SAM failed", error)
@@ -310,7 +319,12 @@ export function PreviewProvider({ children }) {
         paintRef.current = emptyMask(1)
         sizeRef.current = { width: 0, height: 0 }
         ensureWorkingBuffer()
-        clearSamCache()
+        try {
+          const { clearSamCache } = await loadPointSegment()
+          clearSamCache()
+        } catch {
+          // SAM cache is browser-only
+        }
         setFileName(file.name)
         setHasImage(true)
         setColorState(null)

@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Download } from "lucide-react"
-import PreviewStage from "@/components/PreviewStage"
+import PreviewStage from "@/components/ClientPreviewStage"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"
 import {
