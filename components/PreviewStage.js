@@ -11,6 +11,9 @@ export default function PreviewStage({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onTouchStart,
+  onTouchMove,
+  onTouchEnd,
   enabled = false,
   emptyTitle,
   emptyDescription,
@@ -95,6 +98,20 @@ export default function PreviewStage({
   }, [paint])
 
   useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !enabled) return undefined
+    const preventScroll = (event) => {
+      event.preventDefault()
+    }
+    canvas.addEventListener("touchstart", preventScroll, { passive: false })
+    canvas.addEventListener("touchmove", preventScroll, { passive: false })
+    return () => {
+      canvas.removeEventListener("touchstart", preventScroll)
+      canvas.removeEventListener("touchmove", preventScroll)
+    }
+  }, [enabled])
+
+  useEffect(() => {
     schedulePaint()
     const frame = frameRef.current
     if (!frame || typeof ResizeObserver === "undefined") return undefined
@@ -131,11 +148,16 @@ export default function PreviewStage({
       <canvas
         ref={canvasRef}
         className={`block h-full w-full select-none ${enabled ? "cursor-crosshair touch-none" : ""}`}
+        style={{ touchAction: enabled ? "none" : undefined }}
         aria-label="인테리어 미리보기 캔버스"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
       />
       {!preview.hasImage && emptyTitle ? (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-6 text-center">

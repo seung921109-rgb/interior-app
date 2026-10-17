@@ -19,32 +19,43 @@ export default function FileUpload() {
     const canvas = event.currentTarget
     preview.prepareFrame()
     const { width, height } = preview.getSize()
-    if (!width || !height) return null
+    if (!width || !height || !canvas) return null
     return pointerToWorkingPoint(event, canvas, width, height)
+  }
+
+  function isTouchPointer(event) {
+    return event.pointerType === "touch"
   }
 
   function startMask(event) {
     if (!preview.hasImage || preview.analyzing) return
+    if (isTouchPointer(event)) return
     event.preventDefault()
     const point = eventPoint(event)
     if (!point) return
     drawingRef.current = true
     startPointRef.current = point
-    event.currentTarget.setPointerCapture?.(event.pointerId)
+    if (event.pointerId != null) {
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+    }
   }
 
   function moveMask(event) {
     if (!drawingRef.current || !preview.hasImage) return
+    if (isTouchPointer(event)) return
     event.preventDefault()
   }
 
   function endMask(event) {
+    if (isTouchPointer(event)) return
     if (!drawingRef.current) return
     drawingRef.current = false
     const start = startPointRef.current || eventPoint(event)
     startPointRef.current = null
     try {
-      event.currentTarget.releasePointerCapture?.(event.pointerId)
+      if (event.pointerId != null) {
+        event.currentTarget.releasePointerCapture?.(event.pointerId)
+      }
     } catch {
       // already released
     }
@@ -72,6 +83,9 @@ export default function FileUpload() {
         onPointerDown={startMask}
         onPointerMove={moveMask}
         onPointerUp={endMask}
+        onTouchStart={startMask}
+        onTouchMove={moveMask}
+        onTouchEnd={endMask}
         emptyTitle="가구 또는 화장실 사진을 올려 주세요"
         emptyDescription="문짝, 찬장, 테이블 등을 클릭하거나 터치하면 외곽선을 자동으로 따서 영역이 지정됩니다."
       />
