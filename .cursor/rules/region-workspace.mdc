@@ -1,0 +1,15 @@
+---
+description: 영역 설정·컬러/텍스처는 원본을 전체화면으로 두고 도구는 가장자리에 붙인다
+globs: "{app/{page,palette/page}.js,components/{FileUpload,AppShell,PreviewStage,MaskDrawTools,GoToConvertTab,FinishPicker,WorkArea}.js,lib/{canvas,tabs}.js}"
+alwaysApply: true
+---
+
+# 전체화면 작업 화면
+
+사진이 있으면 `/`(영역 설정)와 `/palette`(컬러/텍스처)에서 편집 공간을 최대로 쓴다.
+
+- 원본 사진은 **contain 전체화면**: 잘리지 않게 보여주고, 여백은 어두운 레터박스다. 헤더·하단 탭·제목 설명은 숨긴다.
+- 영역 설정: 터치/브러시/지우개와 보정 버튼은 **아래 고정 독**. 영역이 잡히면 오른쪽 `변환하러가기`로 `/palette` 이동.
+- 컬러/텍스처: 색상·필름 샘플은 **오른쪽 세로 레일**. 아래 독에 영역 수정·원본 되돌리기·변환하기. 횟수 차감 변환은 여기서만 한다.
+- 영역 설정 터치 좌표는 `fit: "contain"`으로 매핑한다.
+- 업로드 전(사진 없음)과 결과 저장 탭은 헤더와 하단 탭을 그대로 둔다.

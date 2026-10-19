@@ -1,7 +1,13 @@
 "use client"
 
 import { useCallback, useEffect, useRef } from "react"
-import { coverSourceRect, drawImageCover, sizeCanvasToContainer } from "@/lib/canvas"
+import {
+  containDestRect,
+  coverSourceRect,
+  drawImageContain,
+  drawImageCover,
+  sizeCanvasToContainer,
+} from "@/lib/canvas"
 import { createSimulationLayers, renderSimulation } from "@/lib/simulateRender"
 import { maskToOverlay } from "@/lib/mask"
 import { usePreview } from "@/context/PreviewContext"
@@ -17,6 +23,10 @@ export default function PreviewStage({
   enabled = false,
   emptyTitle,
   emptyDescription,
+  banner,
+  children,
+  fit = "cover",
+  bleed = false,
 }) {
   const canvasRef = useRef(null)
   const frameRef = useRef(null)
@@ -34,7 +44,7 @@ export default function PreviewStage({
     if (!canvas || !frame) return
     const { ctx, width, height, ready } = sizeCanvasToContainer(canvas, frame)
 
-    ctx.fillStyle = "#efe8dc"
+    ctx.fillStyle = fit === "contain" ? "#11110f" : "#efe8dc"
     ctx.fillRect(0, 0, width, height)
 
     const source = current.getSource()
@@ -42,7 +52,8 @@ export default function PreviewStage({
 
     const imageData = current.prepareFrame()
     if (!imageData) {
-      drawImageCover(ctx, source, width, height)
+      if (fit === "contain") drawImageContain(ctx, source, width, height)
+      else drawImageCover(ctx, source, width, height)
       return
     }
 
@@ -50,9 +61,12 @@ export default function PreviewStage({
     if (!overlayRef.current) overlayRef.current = document.createElement("canvas")
     const work = overlayRef.current
     const mask = current.getMask()
+    const finishJobs =
+      typeof current.getFinishJobs === "function" ? current.getFinishJobs() : []
     const workW = imageData.width
     const workH = imageData.height
     const crop = coverSourceRect(workW, workH, width, height)
+    const dest = containDestRect(workW, workH, width, height)
     const simulate = mode === "finish"
     const finishColor = simulate ? current.displayColor : null
     const finishTexture = simulate ? current.displayTexture : null
@@ -60,21 +74,24 @@ export default function PreviewStage({
     if (work.width !== workW) work.width = workW
     if (work.height !== workH) work.height = workH
 
-    if (finishColor || finishTexture) {
+    if (simulate && (finishJobs.length || finishColor || finishTexture)) {
       renderSimulation(work.getContext("2d"), layersRef.current, {
         imageData,
         mask,
         color: finishColor,
         texture: finishTexture,
+        targets: finishJobs,
         width: workW,
         height: workH,
         version: current.version,
         photoId: current.fileName,
       })
-      drawImageCover(ctx, work, width, height)
+      if (fit === "contain") drawImageContain(ctx, work, width, height)
+      else drawImageCover(ctx, work, width, height)
     } else {
       work.getContext("2d").putImageData(imageData, 0, 0)
-      drawImageCover(ctx, work, width, height)
+      if (fit === "contain") drawImageContain(ctx, work, width, height)
+      else drawImageCover(ctx, work, width, height)
     }
 
     if (mode === "select" && mask?.length === workW * workH) {
@@ -85,9 +102,13 @@ export default function PreviewStage({
         0,
         0,
       )
-      ctx.drawImage(work, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height)
+      if (fit === "contain") {
+        ctx.drawImage(work, 0, 0, workW, workH, dest.dx, dest.dy, dest.dw, dest.dh)
+      } else {
+        ctx.drawImage(work, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height)
+      }
     }
-  }, [mode])
+  }, [fit, mode])
 
   const schedulePaint = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -143,7 +164,11 @@ export default function PreviewStage({
   return (
     <div
       ref={frameRef}
-      className="relative min-h-[140px] flex-1 overflow-hidden rounded-xl border border-stone-200 bg-ink-100"
+      className={
+        bleed
+          ? "relative min-h-0 flex-1 overflow-hidden bg-ink-900"
+          : "relative min-h-[140px] flex-1 overflow-hidden rounded-xl border border-stone-200 bg-ink-100"
+      }
     >
       <canvas
         ref={canvasRef}
@@ -171,14 +196,15 @@ export default function PreviewStage({
       ) : null}
       {mode === "select" &&
       preview.hasImage &&
-      preview.hasMask &&
-      !preview.analyzing ? (
-        <div className="pointer-events-none absolute inset-x-0 top-2 z-[5] flex justify-center px-3">
+      !preview.analyzing &&
+      (banner || preview.hasMask) ? (
+        <div className="pointer-events-none absolute inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-[5] flex justify-center px-3">
           <p className="rounded-full bg-ink-900/80 px-3 py-1.5 text-center text-[11px] font-medium leading-snug text-white">
-            빈공간이 있다면 터치하여 추가 영역 선택
+            {banner || "빈공간이 있다면 터치하여 추가 영역 선택"}
           </p>
         </div>
       ) : null}
+      {children}
       {preview.analyzing ? (
         <div
           className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-ink-900/40"

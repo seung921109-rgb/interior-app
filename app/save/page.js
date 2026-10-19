@@ -18,7 +18,11 @@ export default function SavePage() {
   const [busy, setBusy] = useState(false)
 
   const hasFinish = Boolean(
-    preview.displayColor || preview.displayTexture,
+    preview.displayColor ||
+      preview.displayTexture ||
+      (preview.targets || []).some(
+        (item) => item.hasMask && (item.color || item.texture || item.appliedColor || item.appliedTexture),
+      ),
   )
   const canSave = preview.hasImage && preview.hasMask && hasFinish
 
@@ -34,6 +38,10 @@ export default function SavePage() {
       workHeight: height,
       color: preview.displayColor,
       texture: preview.displayTexture,
+      targets:
+        typeof preview.getFinishJobs === "function"
+          ? preview.getFinishJobs()
+          : [],
     })
     if (!imageData) {
       setMessage("저장할 결과가 없습니다. 영역과 자재를 먼저 적용하세요.")
@@ -102,7 +110,7 @@ export default function SavePage() {
           </p>
         ) : !preview.hasMask ? (
           <p className="text-center text-xs text-stone-500">
-            사진 업로드 탭에서 가구 영역을 먼저 지정하세요.
+            영역 설정 탭에서 가구 영역을 먼저 지정하세요.
           </p>
         ) : !hasFinish ? (
           <p className="text-center text-xs text-stone-500">

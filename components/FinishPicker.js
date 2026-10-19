@@ -43,10 +43,117 @@ function TextureSample({ id }) {
   )
 }
 
-export default function FinishPicker() {
+function FinishRail() {
+  const preview = usePreview()
+  const disabled = !preview.hasMask
+  const [kind, setKind] = useState(preview.texture ? "film" : "paint")
+  const currentFilm = TEXTURES.find((item) => item.id === preview.texture)
+
+  return (
+    <div className="flex h-full min-h-0 w-[4.75rem] flex-col gap-1.5">
+      <div className="grid shrink-0 grid-cols-2 gap-0.5 rounded-xl bg-black/35 p-0.5">
+        <button
+          type="button"
+          aria-pressed={kind === "paint"}
+          onClick={() => setKind("paint")}
+          className={`min-h-8 rounded-lg text-[10px] font-medium ${
+            kind === "paint" ? "bg-white text-ink-900" : "text-white/80"
+          }`}
+        >
+          색상
+        </button>
+        <button
+          type="button"
+          aria-pressed={kind === "film"}
+          onClick={() => setKind("film")}
+          className={`min-h-8 rounded-lg text-[10px] font-medium ${
+            kind === "film" ? "bg-white text-ink-900" : "text-white/80"
+          }`}
+        >
+          필름
+        </button>
+      </div>
+      <div
+        className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        role="list"
+      >
+        {kind === "paint"
+          ? PAINTS.map((paint) => {
+              const active = preview.color === paint.hex
+              return (
+                <button
+                  key={paint.hex}
+                  type="button"
+                  role="listitem"
+                  disabled={disabled}
+                  aria-pressed={active}
+                  onClick={() => preview.setColor(paint.hex)}
+                  className={`flex w-full flex-col items-center gap-1 rounded-xl p-1 disabled:opacity-40 ${
+                    active ? "bg-white ring-2 ring-clay-400" : "bg-black/25"
+                  }`}
+                >
+                  <span
+                    className="block h-9 w-9 rounded-full border border-white/25 shadow-inner"
+                    style={{ background: paint.hex }}
+                  />
+                  <span
+                    className={`block w-full truncate text-[9px] font-medium ${
+                      active ? "text-ink-900" : "text-white/85"
+                    }`}
+                  >
+                    {paint.label}
+                  </span>
+                </button>
+              )
+            })
+          : TEXTURES.map((item) => {
+              const active = preview.texture === item.id
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="listitem"
+                  disabled={disabled}
+                  aria-pressed={active}
+                  onClick={() => preview.setTexture(item.id)}
+                  className={`overflow-hidden rounded-xl text-left disabled:opacity-50 ${
+                    active ? "ring-2 ring-clay-400" : "ring-1 ring-white/15"
+                  }`}
+                >
+                  <span className="block h-11 overflow-hidden bg-ink-100">
+                    <TextureSample id={item.id} />
+                  </span>
+                  <span
+                    className={`block truncate px-1 py-1 text-center text-[9px] font-medium ${
+                      active ? "bg-white text-ink-900" : "bg-black/45 text-white/85"
+                    }`}
+                  >
+                    {item.label}
+                  </span>
+                </button>
+              )
+            })}
+      </div>
+      {kind === "film" && currentFilm ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => preview.setTexture(null)}
+          className="shrink-0 rounded-lg bg-white/12 py-1.5 text-[10px] font-medium text-white disabled:opacity-40"
+        >
+          필름 해제
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+export default function FinishPicker({ layout = "board" }) {
   const preview = usePreview()
   const disabled = !preview.hasMask
   const currentFilm = TEXTURES.find((item) => item.id === preview.texture)
+
+  if (layout === "rail") return <FinishRail />
 
   return (
     <div className="space-y-3">
@@ -97,38 +204,38 @@ export default function FinishPicker() {
             </button>
           ) : null}
         </div>
-      <SwatchScroller label="인테리어 필름지">
-        {TEXTURES.map((item) => {
-          const active = preview.texture === item.id
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="listitem"
-              disabled={disabled}
-              aria-pressed={active}
-              onClick={() => preview.setTexture(item.id)}
-              className={`w-[6.25rem] shrink-0 snap-start select-none overflow-hidden rounded-2xl border text-left disabled:opacity-70 sm:w-[6.75rem] ${
-                active
-                  ? "border-clay-500 ring-2 ring-clay-500/30"
-                  : "border-stone-200"
-              }`}
-            >
-              <span className="block h-12 overflow-hidden bg-ink-100 sm:h-16">
-                <TextureSample id={item.id} />
-              </span>
-              <span className="block bg-white px-2 py-1.5">
-                <span className="block truncate text-[10px] text-stone-500">
-                  {item.group}
+        <SwatchScroller label="인테리어 필름지">
+          {TEXTURES.map((item) => {
+            const active = preview.texture === item.id
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="listitem"
+                disabled={disabled}
+                aria-pressed={active}
+                onClick={() => preview.setTexture(item.id)}
+                className={`w-[6.25rem] shrink-0 snap-start select-none overflow-hidden rounded-2xl border text-left disabled:opacity-70 sm:w-[6.75rem] ${
+                  active
+                    ? "border-clay-500 ring-2 ring-clay-500/30"
+                    : "border-stone-200"
+                }`}
+              >
+                <span className="block h-12 overflow-hidden bg-ink-100 sm:h-16">
+                  <TextureSample id={item.id} />
                 </span>
-                <span className="block truncate text-[11px] font-medium text-ink-800">
-                  {item.label}
+                <span className="block bg-white px-2 py-1.5">
+                  <span className="block truncate text-[10px] text-stone-500">
+                    {item.group}
+                  </span>
+                  <span className="block truncate text-[11px] font-medium text-ink-800">
+                    {item.label}
+                  </span>
                 </span>
-              </span>
-            </button>
-          )
-        })}
-      </SwatchScroller>
+              </button>
+            )
+          })}
+        </SwatchScroller>
       </div>
     </div>
   )

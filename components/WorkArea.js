@@ -1,4 +1,18 @@
-export default function WorkArea({ title, description, children, fill = false }) {
+export default function WorkArea({
+  title,
+  description,
+  children,
+  fill = false,
+  immersive = false,
+}) {
+  if (immersive) {
+    return (
+      <section className="flex h-full min-h-0 flex-col overflow-hidden bg-ink-900">
+        {children}
+      </section>
+    )
+  }
+
   return (
     <section className="flex h-full min-h-0 flex-col bg-ink-50">
       <div className="work-head shrink-0 px-4 pb-2 pt-3">

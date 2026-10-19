@@ -3,7 +3,7 @@
 import { Image } from "lucide-react"
 import { usePreview } from "@/context/PreviewContext"
 
-export default function RestoreOriginalButton({ className = "" }) {
+export default function RestoreOriginalButton({ className = "", compact = false }) {
   const preview = usePreview()
   const canRestore = Boolean(
     preview.color ||
@@ -17,10 +17,13 @@ export default function RestoreOriginalButton({ className = "" }) {
       type="button"
       onClick={() => preview.clearFinish()}
       disabled={!canRestore}
-      className={`flex min-h-11 w-full select-none items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white text-sm font-medium text-ink-900 enabled:active:bg-ink-50 disabled:opacity-40 ${className}`}
+      className={
+        className ||
+        "flex min-h-11 w-full select-none items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white text-sm font-medium text-ink-900 enabled:active:bg-ink-50 disabled:opacity-40"
+      }
     >
       <Image className="h-4 w-4" aria-hidden />
-      원본 이미지로 되돌리기
+      {compact ? "원본" : "원본 이미지로 되돌리기"}
     </button>
   )
 }

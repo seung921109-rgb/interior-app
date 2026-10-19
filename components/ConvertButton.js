@@ -6,7 +6,7 @@ import PaywallModal from "@/components/PaywallModal"
 import { useAuth } from "@/context/AuthContext"
 import { usePreview } from "@/context/PreviewContext"
 
-export default function ConvertButton() {
+export default function ConvertButton({ className = "" }) {
   const preview = usePreview()
   const auth = useAuth()
   const router = useRouter()
@@ -16,7 +16,11 @@ export default function ConvertButton() {
 
   const remaining = Number(auth.remaining ?? 0)
   const exhausted = remaining <= 0
-  const canSelect = preview.hasMask && (preview.color || preview.texture)
+  const hasTargetFinish = (preview.targets || []).some(
+    (item) => item.hasMask && (item.color || item.texture),
+  )
+  const canSelect =
+    hasTargetFinish || (preview.hasMask && (preview.color || preview.texture))
 
   useEffect(() => {
     if (params.get("paid") !== "1") return
@@ -60,7 +64,10 @@ export default function ConvertButton() {
         type="button"
         onClick={onConvert}
         disabled={busy || (!exhausted && !canSelect)}
-        className="flex min-h-11 w-full select-none items-center justify-center rounded-xl bg-clay-600 text-sm font-semibold text-white enabled:active:bg-clay-500 disabled:opacity-40"
+        className={
+          className ||
+          "flex min-h-11 w-full select-none items-center justify-center rounded-xl bg-clay-600 text-sm font-semibold text-white enabled:active:bg-clay-500 disabled:opacity-40"
+        }
       >
         {busy
           ? "변환 중..."
