@@ -32,6 +32,8 @@ async function loadPointSegment() {
   if (typeof window === "undefined") {
     return {
       segmentObjectAtPoint: async () => null,
+      segmentObjectAtPoints: async () => null,
+      warmSegmentModel: async () => {},
       clearSamCache() {},
     }
   }
@@ -75,6 +77,7 @@ export function PreviewProvider({ children }) {
   const [subjects, setSubjectsState] = useState([])
   const [targetMetas, setTargetMetas] = useState([])
   const [activeTargetId, setActiveTargetId] = useState("")
+  const [promptPoints, setPromptPoints] = useState([])
   const [version, setVersion] = useState(0)
 
   function syncUnionMask() {
@@ -129,6 +132,22 @@ export function PreviewProvider({ children }) {
     return imageData
   }
 
+  function rememberPrompts(buffer) {
+    const next = (buffer?.prompts || []).map((point) => ({
+      x: point.x,
+      y: point.y,
+    }))
+    setPromptPoints(next)
+  }
+
+  function warmSegmentation() {
+    const imageData = imageDataRef.current
+    if (!imageData || typeof window === "undefined") return
+    loadPointSegment()
+      .then((mod) => mod.warmSegmentModel?.(imageData))
+      .catch(() => {})
+  }
+
   function completeFromCurrentMask() {
     const imageData = imageDataRef.current
     const labs = labsRef.current
@@ -175,6 +194,7 @@ export function PreviewProvider({ children }) {
         texture ||
         appliedTexture,
       hint,
+      promptPoints,
       subjects,
       subject: subjects[0] || "",
       targets: targetMetas,
@@ -191,6 +211,7 @@ export function PreviewProvider({ children }) {
           setSubjectsState([])
           setTargetMetas([])
           setActiveTargetId("")
+          setPromptPoints([])
           return []
         }
         if (!canCommitSubjects(next)) return subjects.slice()
@@ -203,10 +224,12 @@ export function PreviewProvider({ children }) {
         setSubjectsState(next)
         setTargetMetas(metas)
         setActiveTargetId(metas[0]?.id || "")
+        setPromptPoints([])
+        warmSegmentation()
         bump(
           next.length > 1
             ? `${next.join(", ")} 중 대상을 고른 뒤 영역을 터치하세요.`
-            : `${next[0]} 영역을 터치해 외곽선을 지정하세요.`,
+            : `${next[0]} 영역을 터치하면 그 자리의 경계로 마스크를 만듭니다.`,
         )
         return next.slice()
       },
@@ -217,6 +240,7 @@ export function PreviewProvider({ children }) {
         const meta = targetMetas.find((item) => item.id === id)
         if (!meta) return
         setActiveTargetId(id)
+        rememberPrompts(targetsRef.current.find((item) => item.id === id))
         setColorState(meta.color)
         setTextureState(meta.texture)
         setAppliedColor(meta.appliedColor)
@@ -253,14 +277,21 @@ export function PreviewProvider({ children }) {
         const active = getActiveBuffer()
         if (!imageData || !labs || !width) return
         const label = active?.label || subjects[0] || "영역"
-        const seed = snapWorkingPointToEdge(imageData, x, y)
-        bump(`${label} 외곽선을 인식하는 중...`)
+        const px = Math.max(0, Math.min(width - 1, x))
+        const py = Math.max(0, Math.min(height - 1, y))
+        if (active) {
+          if (!active.prompts) active.prompts = []
+          active.prompts.push({ x: px, y: py, label: 1 })
+          if (active.prompts.length > 12) active.prompts.shift()
+          rememberPrompts(active)
+        }
+        bump(`${label} 경계를 인식하는 중...`)
         setAnalyzing(true)
         const previous = cloneMask(active?.mask || maskRef.current)
         let extra = null
         try {
-          const { segmentObjectAtPoint } = await loadPointSegment()
-          extra = await segmentObjectAtPoint(imageData, seed.x, seed.y, {
+          const { segmentObjectAtPoints } = await loadPointSegment()
+          extra = await segmentObjectAtPoints(imageData, [{ x: px, y: py, label: 1 }], {
             subject: label,
             targetId: active?.id || "target-0",
             targetIndex: active?.index ?? 0,
@@ -270,27 +301,33 @@ export function PreviewProvider({ children }) {
         } finally {
           setAnalyzing(false)
         }
-        if (!extra || isSkinnyMask(extra, width, height)) {
+        let patch = extra
+        if (extra && !isSkinnyMask(extra, width, height)) {
+          patch = solidifyMask(extra, width, height)
+        } else {
+          const seed = snapWorkingPointToEdge(imageData, px, py)
           const flood = smartFloodFill(imageData, labs, seed.x, seed.y, COLOR_TOLERANCE)
-          extra = extra ? unionMask(extra, flood) : flood
+          patch = solidifyMask(extra ? unionMask(extra, flood) : flood, width, height)
+          patch = snapMaskToEdges(imageData, labs, patch, 5)
+          patch = smoothMask(patch, width, height)
+          if (isSkinnyMask(patch, width, height)) {
+            patch = solidifyMask(unionMask(patch, flood), width, height)
+          }
         }
-        extra = solidifyMask(extra, width, height)
-        let patch = refineSelection(imageData, labs, extra, null, {
-          labels: null,
-          preserve: extra,
-        })
-        patch = snapMaskToEdges(imageData, labs, patch, 5)
-        patch = solidifyMask(patch, width, height)
-        patch = smoothMask(patch, width, height)
-        if (isSkinnyMask(patch, width, height)) {
-          patch = solidifyMask(
-            unionMask(patch, smartFloodFill(imageData, labs, seed.x, seed.y, COLOR_TOLERANCE)),
-            width,
-            height,
-          )
+        let shared = 0
+        let patchCount = 0
+        for (let i = 0; i < patch.length; i++) {
+          if (patch[i] < 24) continue
+          patchCount++
+          if (previous[i] >= 24) shared++
         }
-        const next = unionMask(previous, patch)
+        const sameSurface = patchCount > 0 && shared / patchCount >= 0.22
+        const next = sameSurface || !maskHasSelection(previous) ? unionMask(previous, patch) : patch
         fillHoles(next, width, height)
+        if (active && !sameSurface && maskHasSelection(previous)) {
+          active.prompts = [{ x: px, y: py, label: 1 }]
+          rememberPrompts(active)
+        }
         if (active) {
           active.mask = next
           active.paint = emptyMask(next.length)
@@ -301,7 +338,11 @@ export function PreviewProvider({ children }) {
           maskRef.current = next
           paintRef.current = emptyMask(next.length)
         }
-        bump(`${label} 영역을 지정했습니다. 색상/텍스처를 입힐 수 있습니다.`)
+        bump(
+          sameSurface || !maskHasSelection(previous)
+            ? `${label} 면을 원근에 맞춰 잡았습니다. 텍스처가 그 면을 따라 붙습니다.`
+            : `${label} 면을 새로 잡았습니다. 텍스처가 그 면을 따라 붙습니다.`,
+        )
       },
       async smartFill() {
         const message = completeFromCurrentMask()
@@ -382,9 +423,11 @@ export function PreviewProvider({ children }) {
         if (active) {
           active.mask = emptyMask(n)
           active.paint = emptyMask(n)
+          active.prompts = []
         }
         maskRef.current = emptyMask(n)
         paintRef.current = emptyMask(n)
+        setPromptPoints([])
         setTargetMetas((current) =>
           current.map((meta) =>
             meta.id === (active?.id || activeTargetId)
@@ -413,9 +456,11 @@ export function PreviewProvider({ children }) {
         if (active) {
           active.mask = emptyMask(n)
           active.paint = emptyMask(n)
+          active.prompts = []
         }
         maskRef.current = emptyMask(n)
         paintRef.current = emptyMask(n)
+        setPromptPoints([])
         setColorState(null)
         setTextureState(null)
         setAppliedColor(null)
@@ -527,11 +572,13 @@ export function PreviewProvider({ children }) {
         targetsRef.current = []
         setTargetMetas([])
         setActiveTargetId("")
+        setPromptPoints([])
         setColorState(null)
         setTextureState(null)
         setAppliedColor(null)
         setAppliedTexture(null)
         setLivePreview(true)
+        warmSegmentation()
         bump("사진이 올라왔습니다. 바꿀 사물이나 영역을 최대 2개까지 고르세요.")
       },
     }),
@@ -546,6 +593,7 @@ export function PreviewProvider({ children }) {
       appliedTexture,
       livePreview,
       hint,
+      promptPoints,
       subjects,
       targetMetas,
       activeTargetId,

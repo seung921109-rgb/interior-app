@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Suspense } from "react"
+import { Suspense, useRef } from "react"
 import { PencilLine } from "lucide-react"
 import ConvertButton from "@/components/ConvertButton"
 import FinishPicker from "@/components/FinishPicker"
@@ -10,9 +10,52 @@ import RestoreOriginalButton from "@/components/RestoreOriginalButton"
 import TargetSwitcher from "@/components/TargetSwitcher"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"
+import { pointerToWorkingPoint } from "@/lib/canvas"
 
 export default function PalettePage() {
   const preview = usePreview()
+  const previewRef = useRef(preview)
+  const tapRef = useRef(null)
+  previewRef.current = preview
+
+  function tapPoint(event) {
+    const current = previewRef.current
+    if (!current.hasImage || current.analyzing) return null
+    if (typeof event?.type === "string" && event.type.startsWith("touch") && typeof PointerEvent === "function") {
+      return null
+    }
+    current.prepareFrame()
+    const { width, height } = current.getSize()
+    if (!width || !height) return null
+    return pointerToWorkingPoint(event, event.currentTarget, width, height, { fit: "contain" })
+  }
+
+  function onPointerDown(event) {
+    const point = tapPoint(event)
+    if (!point) return
+    event.preventDefault()
+    tapRef.current = point
+    try {
+      if (event.pointerId != null) event.currentTarget.setPointerCapture?.(event.pointerId)
+    } catch {
+      // pointer id is only valid for a real contact
+    }
+  }
+
+  function onPointerUp(event) {
+    const start = tapRef.current
+    tapRef.current = null
+    try {
+      if (event.pointerId != null) event.currentTarget.releasePointerCapture?.(event.pointerId)
+    } catch {
+      // already released
+    }
+    const point = tapPoint(event) || start
+    if (!point) return
+    const current = previewRef.current
+    if (!current.subjects?.length) current.setSubjects(["벽"])
+    void current.fillFromPoint(point.x, point.y)
+  }
 
   if (!preview.hasImage) {
     return (
@@ -40,6 +83,15 @@ export default function PalettePage() {
             mode="finish"
             fit="contain"
             bleed
+            enabled={preview.hasImage && !preview.analyzing}
+            banner={
+              preview.hasMask
+                ? "다른 면을 터치하면 텍스처가 다시 붙습니다"
+                : "벽이나 가구를 터치하세요"
+            }
+            onPointerDown={onPointerDown}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
             emptyTitle="먼저 사진을 올려 주세요"
             emptyDescription="영역 설정 탭에서 사진을 올린 뒤 가구 영역을 선택하세요."
           />
@@ -65,7 +117,7 @@ export default function PalettePage() {
         <div className="shrink-0 space-y-1.5 border-t border-white/10 bg-ink-900 px-2 pt-2 pb-[max(0.55rem,env(safe-area-inset-bottom))]">
           {preview.hasImage && !preview.hasMask ? (
             <p className="text-center text-[11px] text-white/70">
-              선택된 영역이 없습니다. 영역 설정에서 가구를 지정하세요.
+              벽이나 가구를 터치하면 그 면을 잡습니다.
             </p>
           ) : null}
           <div className="grid grid-cols-2 gap-1.5">

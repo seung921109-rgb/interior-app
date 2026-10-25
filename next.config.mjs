@@ -8,7 +8,8 @@ const transformersWeb = path.join(
   "node_modules/@huggingface/transformers/dist/transformers.web.js",
 )
 
-const webgpuStub = path.join(__dirname, "lib/onnx-webgpu-stub.js")
+const onnxWebStub = path.join(__dirname, "lib/onnx-web-stub.js")
+const patchSamDevice = path.join(__dirname, "scripts/patch-sam-device.cjs")
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -21,24 +22,21 @@ const nextConfig = {
     ],
     esmExternals: "loose",
   },
-  webpack: (config, { isServer, webpack }) => {
+  webpack: (config, { isServer }) => {
     config.resolve.alias = {
       ...config.resolve.alias,
       sharp$: false,
       "onnxruntime-node$": false,
     }
 
-    config.plugins.push(
-      new webpack.NormalModuleReplacementPlugin(
-        /onnxruntime-web[\\/].*ort\.webgpu/,
-        webgpuStub,
-      ),
-    )
-
     config.module.rules.push({
       test: /onnxruntime-web[\\/].*\.mjs$/,
       type: "javascript/auto",
       resolve: { fullySpecified: false },
+    })
+    config.module.rules.push({
+      test: /transformers\.web\.js$/,
+      use: patchSamDevice,
     })
 
     if (config.optimization?.minimizer) {
@@ -66,6 +64,7 @@ const nextConfig = {
       }
     } else {
       config.resolve.alias["@huggingface/transformers"] = transformersWeb
+      config.resolve.alias["onnxruntime-web/webgpu"] = onnxWebStub
     }
 
     return config

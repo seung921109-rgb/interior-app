@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   containDestRect,
   coverSourceRect,
@@ -11,6 +11,40 @@ import {
 import { createSimulationLayers, renderSimulation } from "@/lib/simulateRender"
 import { maskToOverlay } from "@/lib/mask"
 import { usePreview } from "@/context/PreviewContext"
+
+function PromptMarks({ frameRef, points, width, height }) {
+  const [box, setBox] = useState(null)
+
+  useEffect(() => {
+    const frame = frameRef.current
+    if (!frame || !points?.length) return undefined
+    const measure = () => {
+      const rect = frame.getBoundingClientRect()
+      setBox({ w: rect.width, h: rect.height })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [frameRef, points])
+
+  if (!box?.w || !box?.h || !width || !height) return null
+  const dest = containDestRect(width, height, box.w, box.h)
+  return (
+    <div className="pointer-events-none absolute inset-0 z-20" aria-hidden>
+      {points.map((point, index) => (
+        <span
+          key={`${index}-${Math.round(point.x)}-${Math.round(point.y)}`}
+          className="absolute h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-emerald-400 shadow"
+          style={{
+            left: dest.dx + (point.x / width) * dest.dw,
+            top: dest.dy + (point.y / height) * dest.dh,
+          }}
+        />
+      ))}
+    </div>
+  )
+}
 
 export default function PreviewStage({
   mode = "select",
@@ -194,17 +228,29 @@ export default function PreviewStage({
           ) : null}
         </div>
       ) : null}
-      {mode === "select" &&
+      {(mode === "select" || (mode === "finish" && banner)) &&
       preview.hasImage &&
       !preview.analyzing &&
       (banner || preview.hasMask) ? (
-        <div className="pointer-events-none absolute inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-[5] flex justify-center px-3">
+        <div
+          className={`pointer-events-none absolute inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-[5] flex justify-center px-3 ${
+            mode === "finish" ? "pr-24" : ""
+          }`}
+        >
           <p className="rounded-full bg-ink-900/80 px-3 py-1.5 text-center text-[11px] font-medium leading-snug text-white">
             {banner || "빈공간이 있다면 터치하여 추가 영역 선택"}
           </p>
         </div>
       ) : null}
       {children}
+      {(mode === "select" || mode === "finish") && preview.promptPoints?.length ? (
+        <PromptMarks
+          frameRef={frameRef}
+          points={preview.promptPoints}
+          width={preview.getSize().width}
+          height={preview.getSize().height}
+        />
+      ) : null}
       {preview.analyzing ? (
         <div
           className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-ink-900/40"

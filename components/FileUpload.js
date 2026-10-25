@@ -48,13 +48,17 @@ export default function FileUpload() {
     })
   }
 
-  function isTouchPointer(event) {
-    return event.pointerType === "touch"
+  function isDuplicateTouch(event) {
+    return (
+      typeof PointerEvent === "function" &&
+      typeof event?.type === "string" &&
+      event.type.startsWith("touch")
+    )
   }
 
   function startMask(event) {
     if (!preview.hasImage || !preview.subjects?.length || preview.analyzing) return
-    if (isTouchPointer(event)) return
+    if (isDuplicateTouch(event)) return
     event.preventDefault()
     const point = eventPoint(event)
     if (!point) return
@@ -71,7 +75,7 @@ export default function FileUpload() {
 
   function moveMask(event) {
     if (!drawingRef.current || !preview.hasImage) return
-    if (isTouchPointer(event)) return
+    if (isDuplicateTouch(event)) return
     event.preventDefault()
     const canvas = event.currentTarget
     const extras =
@@ -96,7 +100,7 @@ export default function FileUpload() {
   }
 
   function endMask(event) {
-    if (isTouchPointer(event)) return
+    if (isDuplicateTouch(event)) return
     if (!drawingRef.current) return
     drawingRef.current = false
     const tool = maskToolRef.current
@@ -219,8 +223,8 @@ export default function FileUpload() {
                   : maskTool === "erase"
                     ? "가늘게 문질러 넘치는 면을 지우세요"
                     : preview.hasMask
-                      ? "빈공간이 있다면 터치하거나 브러시로 보정하세요"
-                      : "가구를 터치해 면을 잡고, 세부는 브러시로 보정하세요"
+                      ? "빈공간이 있다면 그곳을 터치해 경계를 더하세요"
+                      : "벽이나 가구를 터치하면 그 면을 잡습니다"
             }
             onPointerDown={startMask}
             onPointerMove={moveMask}
