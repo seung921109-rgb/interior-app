@@ -28,10 +28,8 @@ body {
 }
 
 .app-shell {
-  height: 100vh;
-  height: 100svh;
-  height: 100dvh;
-  max-height: 100dvh;
+  height: var(--app-height, 100dvh);
+  max-height: var(--app-height, 100dvh);
 }
 
 @layer base {

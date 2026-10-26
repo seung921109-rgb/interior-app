@@ -26,6 +26,7 @@ import {
   toFinishJobs,
   unionTargetMasks,
 } from "@/lib/targets"
+import { geometryFromMask } from "@/lib/detection"
 import {
   createRegionBuffers,
   createRegionMetas,
@@ -147,6 +148,15 @@ export function PreviewProvider({ children }) {
         return {
           ...meta,
           hasMask: buffer ? maskHasSelection(buffer.mask) : false,
+          detection: buffer?.detection
+            ? {
+                id: buffer.detection.id || null,
+                label: buffer.detection.label || null,
+                category: buffer.detection.category || null,
+                box: buffer.detection.box || null,
+                polygon: buffer.detection.polygon || null,
+              }
+            : null,
         }
       }),
     )
@@ -219,10 +229,28 @@ export function PreviewProvider({ children }) {
     return any ? keep : null
   }
 
+  function syncGeometry(active) {
+    if (!active?.mask) return
+    const { width, height } = sizeRef.current
+    if (!width || !height || active.mask.length !== width * height) return
+    const geometry = geometryFromMask(active.mask, width, height)
+    if (!geometry.box) {
+      active.detection = null
+      return
+    }
+    const previous = active.detection || {}
+    active.detection = {
+      ...previous,
+      box: geometry.box,
+      polygon: geometry.polygon,
+    }
+  }
+
   function writeActiveMask(active, next) {
     if (active) {
       active.mask = next
       active.paint = emptyMask(next.length)
+      syncGeometry(active)
       for (const other of targetsRef.current) {
         if (other.id !== active.id) subtractMask(other.mask, next)
       }
@@ -252,8 +280,8 @@ export function PreviewProvider({ children }) {
     const active = getActiveBuffer()
     if (!imageData || !labs || !width) return
     const label = active?.label || subjects[0] || "영역"
-    const px = Math.max(0, Math.min(width - 1, x))
-    const py = Math.max(0, Math.min(height - 1, y))
+    const px = Math.max(0, Math.min(width - 1, Math.round(x)))
+    const py = Math.max(0, Math.min(height - 1, Math.round(y)))
     const previous = cloneMask(active?.mask || maskRef.current)
     const idx = py * width + px
     const inside = previous[idx] > 24 && maskHasSelection(previous)
@@ -325,6 +353,7 @@ export function PreviewProvider({ children }) {
     const restored = active.maskHistory?.pop()
     active.mask = restored && restored.length === active.mask.length ? cloneMask(restored) : emptyMask(n)
     active.paint = emptyMask(active.mask.length)
+    syncGeometry(active)
     rememberPrompts(active)
     for (const other of targetsRef.current) {
       if (other.id !== active.id) subtractMask(other.mask, active.mask)
@@ -367,12 +396,14 @@ export function PreviewProvider({ children }) {
         texture ||
         appliedTexture,
       hint,
+      detectionNotice: "",
       promptPoints,
       imageView,
       peekOriginal,
       subjects,
       subject: subjects[0] || "",
       targets: targetMetas,
+      detections: [],
       regions: Object.fromEntries(
         targetMetas.map((meta) => {
           const buffer = targetsRef.current.find((item) => item.id === meta.id)
@@ -388,6 +419,15 @@ export function PreviewProvider({ children }) {
                 y: point.y,
                 label: point.label === 0 ? 0 : 1,
               })),
+              detection: buffer?.detection
+                ? {
+                    id: buffer.detection.id || null,
+                    label: buffer.detection.label || null,
+                    category: buffer.detection.category || null,
+                    box: buffer.detection.box || null,
+                    polygon: buffer.detection.polygon || [],
+                  }
+                : null,
               color: meta.color,
               texture: meta.texture,
               appliedColor: meta.appliedColor,
@@ -438,6 +478,11 @@ export function PreviewProvider({ children }) {
         setAppliedTexture(meta.appliedTexture)
         bump(`${meta.label}에만 마스크와 마감이 쌓입니다.`)
       },
+      async detectObjects() {
+        return []
+      },
+      dismissDetection() {},
+      assignDetection() {},
       getFinishJobs() {
         return toFinishJobs(targetMetas, targetsRef.current)
       },
@@ -448,13 +493,24 @@ export function PreviewProvider({ children }) {
       paintBrush(from, to, radius = BRUSH_RADIUS, value = 255) {
         const { width, height } = sizeRef.current
         if (!width || !height) return
-        const active = getActiveBuffer()
-        const targetMask = active?.mask || maskRef.current
-        const targetPaint = active?.paint || paintRef.current
-        if (targetMask.length !== width * height) return
         const tone = value > 0 ? 255 : 0
-        stampBrushSegment(targetMask, width, height, from, to, radius, tone)
-        stampBrushSegment(targetPaint, width, height, from, to, radius, tone)
+        if (tone === 0) {
+          for (const region of targetsRef.current) {
+            if (region.mask?.length !== width * height) continue
+            stampBrushSegment(region.mask, width, height, from, to, radius, 0)
+            if (region.paint?.length === width * height) {
+              stampBrushSegment(region.paint, width, height, from, to, radius, 0)
+            }
+            syncGeometry(region)
+          }
+        } else {
+          const active = getActiveBuffer()
+          const targetMask = active?.mask || maskRef.current
+          const targetPaint = active?.paint || paintRef.current
+          if (targetMask.length !== width * height) return
+          stampBrushSegment(targetMask, width, height, from, to, radius, tone)
+          stampBrushSegment(targetPaint, width, height, from, to, radius, tone)
+        }
         if (paintBumpRaf.current) return
         paintBumpRaf.current = requestAnimationFrame(() => {
           paintBumpRaf.current = 0
@@ -552,6 +608,7 @@ export function PreviewProvider({ children }) {
           active.paint = emptyMask(n)
           active.prompts = []
           active.maskHistory = []
+          active.detection = null
         }
         maskRef.current = emptyMask(n)
         paintRef.current = emptyMask(n)
@@ -566,6 +623,7 @@ export function PreviewProvider({ children }) {
                   texture: null,
                   appliedColor: null,
                   appliedTexture: null,
+                  detection: null,
                 }
               : meta,
           ),

@@ -1,7 +1,8 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { Camera, ImageUp, RefreshCw, Sparkles, WandSparkles } from "lucide-react"
+import { Camera, ImageUp, RefreshCw, ScanSearch, Sparkles, WandSparkles } from "lucide-react"
+import DetectionBar from "@/components/DetectionBar"
 import GoToConvertTab from "@/components/GoToConvertTab"
 import MaskDrawTools, { brushRadiusForSize } from "@/components/MaskDrawTools"
 import PreviewStage from "@/components/ClientPreviewStage"
@@ -9,7 +10,7 @@ import RegionBar from "@/components/RegionBar"
 import ResetAreaButton from "@/components/ResetAreaButton"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"
-import { pointerToWorkingPoint } from "@/lib/canvas"
+import { canvasEventToImagePoint } from "@/lib/canvas"
 
 export default function FileUpload() {
   const preview = usePreview()
@@ -39,10 +40,13 @@ export default function FileUpload() {
     preview.prepareFrame()
     const { width, height } = preview.getSize()
     if (!width || !height) return null
-    return pointerToWorkingPoint(event, canvas || event.currentTarget, width, height, {
-      fit: "contain",
-      view: preview.imageView,
-    })
+    return canvasEventToImagePoint(
+      event,
+      canvas || event.currentTarget,
+      width,
+      height,
+      preview.imageView,
+    )
   }
 
   function isDuplicateTouch(event) {
@@ -123,7 +127,20 @@ export default function FileUpload() {
     }
     const end = eventPoint(event) || last || start
     if (!end) return
-    void preview.fillFromPoint(end.x, end.y)
+    try {
+      void preview.fillFromPoint(end.x, end.y)
+    } catch (err) {
+      setError(err?.message || "영역을 지정하지 못했습니다. 다시 터치해 주세요.")
+    }
+  }
+
+  async function findObjects() {
+    try {
+      setError("")
+      await preview.detectObjects()
+    } catch (err) {
+      setError(err?.message || "사물 찾기에 실패했습니다. 화면을 터치해 영역을 지정하세요.")
+    }
   }
 
   async function onInputChange(event) {
@@ -238,7 +255,24 @@ export default function FileUpload() {
               {error}
             </p>
           ) : null}
+          {preview.detectionNotice ? (
+            <p className="text-center text-[11px] leading-relaxed text-amber-100" role="alert">
+              {preview.detectionNotice}
+            </p>
+          ) : null}
           <RegionBar />
+          <button
+            type="button"
+            onClick={() => {
+              void findObjects()
+            }}
+            disabled={preview.isProcessing}
+            className="flex min-h-9 w-full select-none items-center justify-center gap-1 rounded-xl bg-white/10 text-[11px] font-medium text-white enabled:active:bg-white/16 disabled:opacity-40"
+          >
+            <ScanSearch className="h-3.5 w-3.5" aria-hidden />
+            사물 찾기
+          </button>
+          <DetectionBar />
 
           <MaskDrawTools
             dock

@@ -6,6 +6,7 @@ import {
   containDestRect,
   coverSourceRect,
   drawImageCover,
+  pointerToCanvasPixels,
   sizeCanvasToContainer,
   sourceSize,
   viewDestRect,
@@ -37,6 +38,7 @@ export default function PreviewStage({
   const overlayRef = useRef(null)
   const layersRef = useRef(null)
   const rafRef = useRef(0)
+  const paintGenRef = useRef(0)
   const pointersRef = useRef(new Map())
   const pinchRef = useRef(null)
   const dragRef = useRef(null)
@@ -138,20 +140,20 @@ export default function PreviewStage({
   }, [fit, mode])
 
   const schedulePaint = useCallback(() => {
+    const gen = paintGenRef.current + 1
+    paintGenRef.current = gen
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0
+      if (gen !== paintGenRef.current) return
       paint()
     })
   }, [paint])
 
   const bitmapPoint = useCallback((event) => {
     const canvas = canvasRef.current
-    const rect = canvas.getBoundingClientRect()
-    return {
-      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
-      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
-    }
+    if (!canvas) return { x: 0, y: 0 }
+    return pointerToCanvasPixels(event, canvas)
   }, [])
 
   const focusView = useCallback((focal, nextScale) => {
@@ -190,6 +192,11 @@ export default function PreviewStage({
       return
     }
     pointersRef.current.set(event.pointerId, bitmapPoint(event))
+    try {
+      event.currentTarget?.setPointerCapture?.(event.pointerId)
+    } catch {
+      // pointer already released
+    }
     if (pointersRef.current.size >= 2) {
       const points = [...pointersRef.current.values()]
       gestureRef.current = "pinch"
@@ -224,9 +231,12 @@ export default function PreviewStage({
     const drag = dragRef.current
     if (drag && event.pointerId === drag.id && drawToolRef.current !== "erase") {
       const point = bitmapPoint(event)
+      const canvas = canvasRef.current
+      const rect = canvas?.getBoundingClientRect()
+      const unit = rect?.width ? canvas.width / rect.width : 1
       const travel = Math.hypot(point.x - drag.x, point.y - drag.y)
       const scale = previewRef.current.imageView?.scale || 1
-      if (!drag.moved && travel > 14 && scale > 1) drag.moved = true
+      if (!drag.moved && travel > 18 * unit && scale > 1) drag.moved = true
       if (drag.moved) {
         const canvas = canvasRef.current
         const { width: workW, height: workH } = previewRef.current.getSize()
@@ -285,11 +295,7 @@ export default function PreviewStage({
     }
     const onWheel = (event) => {
       event.preventDefault()
-      const rect = canvas.getBoundingClientRect()
-      const focal = {
-        x: ((event.clientX - rect.left) / rect.width) * canvas.width,
-        y: ((event.clientY - rect.top) / rect.height) * canvas.height,
-      }
+      const focal = pointerToCanvasPixels(event, canvas)
       const scale = previewRef.current.imageView?.scale || 1
       const next = scale * Math.exp(-event.deltaY * 0.0016)
       focusView(focal, next)
@@ -303,6 +309,11 @@ export default function PreviewStage({
       canvas.removeEventListener("wheel", onWheel)
     }
   }, [focusView, preview.hasImage])
+
+  useEffect(() => {
+    layersRef.current = null
+    overlayRef.current = null
+  }, [preview.fileName])
 
   useEffect(() => {
     schedulePaint()

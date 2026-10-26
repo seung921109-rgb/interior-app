@@ -12,7 +12,7 @@ import PreviewStage from "@/components/ClientPreviewStage"
 import RestoreOriginalButton from "@/components/RestoreOriginalButton"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"
-import { pointerToWorkingPoint } from "@/lib/canvas"
+import { canvasEventToImagePoint } from "@/lib/canvas"
 
 export default function PalettePage() {
   const preview = usePreview()
@@ -29,10 +29,7 @@ export default function PalettePage() {
     current.prepareFrame()
     const { width, height } = current.getSize()
     if (!width || !height) return null
-    return pointerToWorkingPoint(event, event.currentTarget, width, height, {
-      fit: "contain",
-      view: current.imageView,
-    })
+    return canvasEventToImagePoint(event, event.currentTarget, width, height, current.imageView)
   }
 
   function onPointerDown(event) {
