@@ -43,6 +43,7 @@ export default function ConvertButton({ className = "" }) {
     if (!canSelect) return
 
     setBusy(true)
+    preview.startProcessing("마감을 변환하는 중...")
     try {
       const used = await auth.consumeFreeCount()
       if (!used.ok) {
@@ -54,6 +55,7 @@ export default function ConvertButton({ className = "" }) {
         setOpen(true)
       }
     } finally {
+      preview.stopProcessing()
       setBusy(false)
     }
   }

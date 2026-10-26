@@ -5,9 +5,8 @@ import { Camera, ImageUp, RefreshCw, Sparkles, WandSparkles } from "lucide-react
 import GoToConvertTab from "@/components/GoToConvertTab"
 import MaskDrawTools, { brushRadiusForSize } from "@/components/MaskDrawTools"
 import PreviewStage from "@/components/ClientPreviewStage"
+import RegionBar from "@/components/RegionBar"
 import ResetAreaButton from "@/components/ResetAreaButton"
-import SubjectPickerSheet from "@/components/SubjectPickerSheet"
-import TargetSwitcher from "@/components/TargetSwitcher"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"
 import { pointerToWorkingPoint } from "@/lib/canvas"
@@ -27,16 +26,13 @@ export default function FileUpload() {
   maskToolRef.current = maskTool
   brushSizeRef.current = brushSize
 
-  function strokeValue() {
-    return maskToolRef.current === "erase" ? 0 : 255
-  }
-
   function strokeRadius() {
     return brushRadiusForSize(brushSizeRef.current)
   }
 
   function paintStroke(from, to) {
-    preview.paintBrush(from, to, strokeRadius(), strokeValue())
+    if (maskToolRef.current !== "erase") return
+    preview.paintBrush(from, to, strokeRadius(), 0)
   }
 
   function eventPoint(event, canvas) {
@@ -45,6 +41,7 @@ export default function FileUpload() {
     if (!width || !height) return null
     return pointerToWorkingPoint(event, canvas || event.currentTarget, width, height, {
       fit: "contain",
+      view: preview.imageView,
     })
   }
 
@@ -57,7 +54,7 @@ export default function FileUpload() {
   }
 
   function startMask(event) {
-    if (!preview.hasImage || !preview.subjects?.length || preview.analyzing) return
+    if (!preview.hasImage || preview.analyzing) return
     if (isDuplicateTouch(event)) return
     event.preventDefault()
     const point = eventPoint(event)
@@ -66,9 +63,13 @@ export default function FileUpload() {
     startPointRef.current = point
     lastPointRef.current = point
     if (event.pointerId != null) {
-      event.currentTarget.setPointerCapture?.(event.pointerId)
+      try {
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+      } catch {
+        // pointer already released
+      }
     }
-    if (maskToolRef.current !== "tap") {
+    if (maskToolRef.current === "erase") {
       paintStroke(null, point)
     }
   }
@@ -79,7 +80,7 @@ export default function FileUpload() {
     event.preventDefault()
     const canvas = event.currentTarget
     const extras =
-      maskToolRef.current !== "tap" && typeof event.getCoalescedEvents === "function"
+      maskToolRef.current === "erase" && typeof event.getCoalescedEvents === "function"
         ? event.getCoalescedEvents()
         : null
     if (extras?.length) {
@@ -93,7 +94,7 @@ export default function FileUpload() {
     }
     const point = eventPoint(event, canvas)
     if (!point) return
-    if (maskToolRef.current !== "tap") {
+    if (maskToolRef.current === "erase") {
       paintStroke(lastPointRef.current, point)
     }
     lastPointRef.current = point
@@ -115,7 +116,7 @@ export default function FileUpload() {
     } catch {
       // already released
     }
-    if (tool !== "tap") {
+    if (tool === "erase") {
       const point = eventPoint(event)
       if (point && last) paintStroke(last, point)
       return
@@ -204,8 +205,6 @@ export default function FileUpload() {
     )
   }
 
-  const pickingSubject = Boolean(preview.hasImage && !preview.subjects?.length)
-
   return (
     <WorkArea immersive>
       <div className="flex h-full min-h-0 flex-col">
@@ -214,18 +213,15 @@ export default function FileUpload() {
             mode="select"
             fit="contain"
             bleed
-            enabled={!pickingSubject && !preview.analyzing}
+            enabled={!preview.analyzing}
             banner={
-              pickingSubject
-                ? "바꿀 사물이나 영역을 최대 2개까지 고르세요"
-                : maskTool === "brush"
-                  ? "가늘게 칠해 빠진 면을 더하세요"
-                  : maskTool === "erase"
-                    ? "가늘게 문질러 넘치는 면을 지우세요"
-                    : preview.hasMask
-                      ? "빈공간이 있다면 그곳을 터치해 경계를 더하세요"
-                      : "벽이나 가구를 터치하면 그 면을 잡습니다"
+              maskTool === "erase"
+                ? "가늘게 문질러 넘치는 면을 지우세요"
+                : preview.hasMask
+                  ? "다른 영역 버튼을 누르면 그 면에만 따로 마스크가 쌓입니다"
+                  : "영역 1에 면을 터치하세요. 다른 면은 영역 2, 영역 3으로 나눠 칠합니다"
             }
+            drawTool={maskTool === "erase" ? "erase" : "tap"}
             onPointerDown={startMask}
             onPointerMove={moveMask}
             onPointerUp={endMask}
@@ -233,10 +229,7 @@ export default function FileUpload() {
             onTouchMove={moveMask}
             onTouchEnd={endMask}
           />
-          {!pickingSubject ? <GoToConvertTab /> : null}
-          {pickingSubject ? (
-            <SubjectPickerSheet onConfirm={(items) => preview.setSubjects(items)} />
-          ) : null}
+          <GoToConvertTab />
         </div>
 
         <div className="shrink-0 space-y-1.5 border-t border-white/10 bg-ink-900 px-2 pt-2 pb-[max(0.55rem,env(safe-area-inset-bottom))]">
@@ -245,34 +238,15 @@ export default function FileUpload() {
               {error}
             </p>
           ) : null}
-          {preview.subjects?.length ? (
-            <div className="flex items-center justify-between gap-2">
-              <TargetSwitcher
-                tone="dark"
-                targets={preview.targets}
-                activeTargetId={preview.activeTargetId}
-                onSelect={(id) => preview.setActiveTarget(id)}
-              />
-              <button
-                type="button"
-                data-subjects={JSON.stringify(preview.subjects)}
-                onClick={() => preview.setSubjects([])}
-                className="shrink-0 rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-medium text-white/85"
-              >
-                용도 변경
-              </button>
-            </div>
-          ) : null}
+          <RegionBar />
 
-          {!pickingSubject ? (
-            <MaskDrawTools
-              dock
-              tool={maskTool}
-              onTool={setMaskTool}
-              sizeId={brushSize}
-              onSize={setBrushSize}
-            />
-          ) : null}
+          <MaskDrawTools
+            dock
+            tool={maskTool === "erase" ? "erase" : "tap"}
+            onTool={setMaskTool}
+            sizeId={brushSize}
+            onSize={setBrushSize}
+          />
 
           <div className="grid grid-cols-4 gap-1.5">
             <button
@@ -294,7 +268,7 @@ export default function FileUpload() {
             <button
               type="button"
               onClick={() => preview.smartFill()}
-              disabled={pickingSubject || !preview.hasMask}
+              disabled={!preview.hasMask}
               className="flex min-h-9 select-none items-center justify-center gap-1 rounded-xl bg-white/10 text-[10px] font-medium text-white enabled:active:bg-white/16 disabled:opacity-35"
             >
               <Sparkles className="h-3.5 w-3.5" aria-hidden />
@@ -303,16 +277,17 @@ export default function FileUpload() {
             <button
               type="button"
               onClick={() => preview.refineRegion()}
-              disabled={pickingSubject || !preview.hasMask}
+              disabled={!preview.hasMask}
               className="flex min-h-9 select-none items-center justify-center gap-1 rounded-xl bg-white/10 text-[10px] font-medium text-white enabled:active:bg-white/16 disabled:opacity-35"
             >
               <WandSparkles className="h-3.5 w-3.5" aria-hidden />
               다듬기
             </button>
           </div>
-          {!pickingSubject ? (
-            <ResetAreaButton className="min-h-9 w-full border-white/15 bg-white/10 text-xs text-white enabled:active:bg-white/16" />
-          ) : null}
+          <ResetAreaButton
+            label="초기화"
+            className="min-h-9 w-full border-white/15 bg-white/10 text-[10px] text-white enabled:active:bg-white/16"
+          />
         </div>
         {fileInputs}
       </div>

@@ -1,6 +1,7 @@
 "use client"
 
-import { Eraser, MousePointerClick, Paintbrush } from "lucide-react"
+import { Eraser, MousePointerClick } from "lucide-react"
+import CompareButton from "@/components/CompareButton"
 
 const SIZES = [
   { id: "s", label: "가늘게", radius: 3.5 },
@@ -8,7 +9,13 @@ const SIZES = [
   { id: "l", label: "굵게", radius: 11 },
 ]
 
-export default function MaskDrawTools({ tool, onTool, sizeId, onSize, dock = false }) {
+export default function MaskDrawTools({
+  tool,
+  onTool,
+  sizeId,
+  onSize,
+  dock = false,
+}) {
   return (
     <div
       className={
@@ -29,17 +36,7 @@ export default function MaskDrawTools({ tool, onTool, sizeId, onSize, dock = fal
           <MousePointerClick className="h-3.5 w-3.5" aria-hidden />
           터치
         </button>
-        <button
-          type="button"
-          aria-pressed={tool === "brush"}
-          onClick={() => onTool("brush")}
-          className={`flex min-h-10 flex-1 items-center justify-center gap-1 rounded-xl text-[11px] font-medium ${
-            tool === "brush" ? "bg-white text-ink-900" : "text-white/85"
-          }`}
-        >
-          <Paintbrush className="h-3.5 w-3.5" aria-hidden />
-          브러시
-        </button>
+        <CompareButton className="min-h-10 flex-1 bg-transparent text-white enabled:active:bg-white/10" />
         <button
           type="button"
           aria-pressed={tool === "erase"}

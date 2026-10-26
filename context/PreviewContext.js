@@ -2,13 +2,14 @@
 
 import { createContext, useContext, useMemo, useRef, useState } from "react"
 import {
+  DEFAULT_IMAGE_VIEW,
   disposeImageSource,
   loadImageSource,
   rasterizeSource,
   sourceSize,
 } from "@/lib/canvas"
 import { applyFinish } from "@/lib/finish"
-import { canCommitSubjects, normalizeSubjects } from "@/lib/subjects"
+import { normalizeSubjects } from "@/lib/subjects"
 import {
   BRUSH_RADIUS,
   cloneMask,
@@ -16,18 +17,21 @@ import {
   fillHoles,
   isSkinnyMask,
   maskHasSelection,
-  solidifyMask,
   stampBrushSegment,
   subtractMask,
   unionMask,
 } from "@/lib/mask"
 import {
-  createTargetBuffer,
-  createTargetMeta,
   resizeTargetBuffer,
   toFinishJobs,
   unionTargetMasks,
 } from "@/lib/targets"
+import {
+  createRegionBuffers,
+  createRegionMetas,
+  regionIdFrom,
+  regionNumber,
+} from "@/lib/regions"
 async function loadPointSegment() {
   if (typeof window === "undefined") {
     return {
@@ -40,19 +44,28 @@ async function loadPointSegment() {
   return import("@/lib/pointSegment")
 }
 import {
-  COLOR_TOLERANCE,
+  bridgeInteriorGaps,
+  countMaskOn,
+  intersectMasks,
+  strictRegionFromPoint,
+} from "@/lib/maskConstraint"
+import {
   borderBackgroundMask,
   buildLabBuffer,
   expandFromPaint,
   refineSelection,
   smartFillFromMask,
-  smartFloodFill,
-  snapMaskToEdges,
-  snapWorkingPointToEdge,
   smoothMask,
   sobelMagnitude,
 } from "@/lib/smartMask"
 const PreviewContext = createContext(null)
+
+function waitForPaint() {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve()
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  })
+}
 
 export function PreviewProvider({ children }) {
   const sourceRef = useRef(null)
@@ -63,11 +76,17 @@ export function PreviewProvider({ children }) {
   const targetsRef = useRef([])
   const sizeRef = useRef({ width: 0, height: 0 })
   const paintBumpRaf = useRef(0)
+  const fillChainRef = useRef(Promise.resolve())
+  const maskOpsRef = useRef({})
 
   const [fileName, setFileName] = useState("")
   const [hasImage, setHasImage] = useState(false)
   const [hasMask, setHasMask] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [processingMessage, setProcessingMessage] = useState("")
+  const processingCountRef = useRef(0)
+  const processingOpsRef = useRef({ start() {}, stop() {} })
   const [color, setColorState] = useState(null)
   const [texture, setTextureState] = useState(null)
   const [appliedColor, setAppliedColor] = useState(null)
@@ -78,7 +97,26 @@ export function PreviewProvider({ children }) {
   const [targetMetas, setTargetMetas] = useState([])
   const [activeTargetId, setActiveTargetId] = useState("")
   const [promptPoints, setPromptPoints] = useState([])
+  const [imageView, setImageViewState] = useState(DEFAULT_IMAGE_VIEW)
+  const [peekOriginal, setPeekOriginalState] = useState(false)
   const [version, setVersion] = useState(0)
+
+  function startProcessing(message) {
+    processingCountRef.current += 1
+    setProcessingMessage(message)
+    setIsProcessing(true)
+    setAnalyzing(true)
+  }
+
+  function stopProcessing() {
+    processingCountRef.current = Math.max(0, processingCountRef.current - 1)
+    if (processingCountRef.current > 0) return
+    setIsProcessing(false)
+    setAnalyzing(false)
+  }
+
+  processingOpsRef.current.start = startProcessing
+  processingOpsRef.current.stop = stopProcessing
 
   function syncUnionMask() {
     if (!targetsRef.current.length) return
@@ -136,6 +174,7 @@ export function PreviewProvider({ children }) {
     const next = (buffer?.prompts || []).map((point) => ({
       x: point.x,
       y: point.y,
+      label: point.label === 0 ? 0 : 1,
     }))
     setPromptPoints(next)
   }
@@ -168,12 +207,146 @@ export function PreviewProvider({ children }) {
     return "비슷한 색 안쪽을 채우고 거친 경계를 매끄럽게 보정했습니다."
   }
 
+  function protectedByPrompts(imageData, labs, prompts) {
+    const n = imageData.width * imageData.height
+    let keep = emptyMask(n)
+    let any = false
+    for (const point of prompts || []) {
+      if (point.label === 0) continue
+      any = true
+      keep = unionMask(keep, strictRegionFromPoint(imageData, labs, point.x, point.y))
+    }
+    return any ? keep : null
+  }
+
+  function writeActiveMask(active, next) {
+    if (active) {
+      active.mask = next
+      active.paint = emptyMask(next.length)
+      for (const other of targetsRef.current) {
+        if (other.id !== active.id) subtractMask(other.mask, next)
+      }
+    } else {
+      maskRef.current = next
+      paintRef.current = emptyMask(next.length)
+    }
+  }
+
+  function pushPrompt(active, previous, point) {
+    if (!active) return
+    if (!active.prompts) active.prompts = []
+    if (!active.maskHistory) active.maskHistory = []
+    active.maskHistory.push(previous)
+    active.prompts.push(point)
+    if (active.prompts.length > 24) {
+      active.prompts.shift()
+      active.maskHistory.shift()
+    }
+    rememberPrompts(active)
+  }
+
+  async function addClickPoint(x, y) {
+    const imageData = ensureWorkingBuffer()
+    const labs = labsRef.current
+    const { width, height } = sizeRef.current
+    const active = getActiveBuffer()
+    if (!imageData || !labs || !width) return
+    const label = active?.label || subjects[0] || "영역"
+    const px = Math.max(0, Math.min(width - 1, x))
+    const py = Math.max(0, Math.min(height - 1, y))
+    const previous = cloneMask(active?.mask || maskRef.current)
+    const idx = py * width + px
+    const inside = previous[idx] > 24 && maskHasSelection(previous)
+
+    if (inside) {
+      const cut = strictRegionFromPoint(imageData, labs, px, py)
+      const keep = protectedByPrompts(imageData, labs, active?.prompts)
+      let removable = 0
+      for (let i = 0; i < previous.length; i++) {
+        if (cut[i] > 24 && previous[i] > 24 && !(keep && keep[i] > 24)) removable++
+      }
+      if (removable < 20) {
+        bump("이미 잡힌 면입니다. 벽·타일·천장으로 새어 나간 곳을 터치하면 그 부분만 빠집니다.")
+        return
+      }
+      pushPrompt(active, previous, { x: px, y: py, label: 0 })
+      const next = cloneMask(previous)
+      for (let i = 0; i < next.length; i++) {
+        if (cut[i] > 24 && !(keep && keep[i] > 24)) next[i] = 0
+      }
+      writeActiveMask(active, next)
+      bump("새어 나간 부분을 마스크에서 뺐습니다.")
+      return
+    }
+
+    pushPrompt(active, previous, { x: px, y: py, label: 1 })
+    bump(`${label} 경계를 인식하는 중...`)
+    startProcessing("AI가 영역을 분석 중입니다...")
+    try {
+      const points = (active?.prompts || [{ x: px, y: py, label: 1 }]).map((point) => ({
+        x: point.x,
+        y: point.y,
+        label: point.label === 0 ? 0 : 1,
+      }))
+      let extra = null
+      try {
+        const { segmentObjectAtPoints } = await loadPointSegment()
+        extra = await segmentObjectAtPoints(imageData, points, {
+          subject: label,
+          targetId: active?.id || "target-0",
+          targetIndex: active?.index ?? 0,
+        })
+      } catch (error) {
+        console.warn("point SAM failed", error)
+      }
+      const allowed = strictRegionFromPoint(imageData, labs, px, py)
+      let patch = allowed
+      if (extra && !isSkinnyMask(extra, width, height)) {
+        const clipped = intersectMasks(extra, allowed)
+        if (countMaskOn(clipped) >= 40) patch = clipped
+      }
+      if (patch[idx] < 24) patch = allowed
+      let next = unionMask(previous, patch)
+      next = bridgeInteriorGaps(next, width, height, 3)
+      writeActiveMask(active, next)
+      bump(`${label} 경계를 넘지 않게 이었습니다. 다른 문짝을 터치하면 더 붙습니다.`)
+      await waitForPaint()
+    } finally {
+      stopProcessing()
+    }
+  }
+
+  function undoLastClick() {
+    const { width, height } = sizeRef.current
+    const n = Math.max(1, width * height)
+    const active = getActiveBuffer()
+    if (!active?.prompts?.length) return
+    active.prompts.pop()
+    const restored = active.maskHistory?.pop()
+    active.mask = restored && restored.length === active.mask.length ? cloneMask(restored) : emptyMask(n)
+    active.paint = emptyMask(active.mask.length)
+    rememberPrompts(active)
+    for (const other of targetsRef.current) {
+      if (other.id !== active.id) subtractMask(other.mask, active.mask)
+    }
+    bump(
+      active.prompts.length
+        ? "마지막 클릭을 취소했습니다."
+        : "클릭을 모두 취소해 마스크를 비웠습니다.",
+    )
+  }
+
+  maskOpsRef.current.addClickPoint = addClickPoint
+  maskOpsRef.current.undoLastClick = undoLastClick
+
   const api = useMemo(
     () => ({
       fileName,
       hasImage,
       hasMask,
       analyzing,
+      isProcessing,
+      processingMessage,
       color,
       texture,
       appliedColor,
@@ -195,57 +368,75 @@ export function PreviewProvider({ children }) {
         appliedTexture,
       hint,
       promptPoints,
+      imageView,
+      peekOriginal,
       subjects,
       subject: subjects[0] || "",
       targets: targetMetas,
+      regions: Object.fromEntries(
+        targetMetas.map((meta) => {
+          const buffer = targetsRef.current.find((item) => item.id === meta.id)
+          return [
+            meta.id,
+            {
+              id: meta.id,
+              label: meta.label,
+              index: meta.index,
+              mask: buffer?.mask || emptyMask(1),
+              prompts: (buffer?.prompts || []).map((point) => ({
+                x: point.x,
+                y: point.y,
+                label: point.label === 0 ? 0 : 1,
+              })),
+              color: meta.color,
+              texture: meta.texture,
+              appliedColor: meta.appliedColor,
+              appliedTexture: meta.appliedTexture,
+              hasMask: meta.hasMask,
+            },
+          ]
+        }),
+      ),
       activeTargetId,
+      activeTarget: regionNumber(activeTargetId),
       version,
       getSource: () => sourceRef.current,
       getImageData: () => imageDataRef.current,
       getMask: () => maskRef.current,
       getSize: () => sizeRef.current,
+      setImageView(next) {
+        setImageViewState((current) => {
+          const view = typeof next === "function" ? next(current) : next
+          if (!view) return DEFAULT_IMAGE_VIEW
+          return {
+            scale: view.scale,
+            u: view.u,
+            v: view.v,
+          }
+        })
+      },
+      setPeekOriginal(next) {
+        setPeekOriginalState(Boolean(next))
+      },
       setSubjects(nextSubjects) {
         const next = normalizeSubjects(nextSubjects)
-        if (next.length === 0) {
-          targetsRef.current = []
-          setSubjectsState([])
-          setTargetMetas([])
-          setActiveTargetId("")
-          setPromptPoints([])
-          return []
-        }
-        if (!canCommitSubjects(next)) return subjects.slice()
-        const { width, height } = sizeRef.current
-        const n = Math.max(1, width * height)
-        targetsRef.current = next.map((label, index) =>
-          createTargetBuffer(label, index, n),
-        )
-        const metas = next.map((label, index) => createTargetMeta(label, index))
         setSubjectsState(next)
-        setTargetMetas(metas)
-        setActiveTargetId(metas[0]?.id || "")
-        setPromptPoints([])
-        warmSegmentation()
-        bump(
-          next.length > 1
-            ? `${next.join(", ")} 중 대상을 고른 뒤 영역을 터치하세요.`
-            : `${next[0]} 영역을 터치하면 그 자리의 경계로 마스크를 만듭니다.`,
-        )
         return next.slice()
       },
       getSubjects() {
         return subjects.slice()
       },
       setActiveTarget(id) {
-        const meta = targetMetas.find((item) => item.id === id)
+        const nextId = regionIdFrom(id)
+        const meta = targetMetas.find((item) => item.id === nextId)
         if (!meta) return
-        setActiveTargetId(id)
-        rememberPrompts(targetsRef.current.find((item) => item.id === id))
+        setActiveTargetId(nextId)
+        rememberPrompts(targetsRef.current.find((item) => item.id === nextId))
         setColorState(meta.color)
         setTextureState(meta.texture)
         setAppliedColor(meta.appliedColor)
         setAppliedTexture(meta.appliedTexture)
-        bump(`${meta.label}을 선택했습니다. 영역을 지정하거나 마감을 입히세요.`)
+        bump(`${meta.label}에만 마스크와 마감이 쌓입니다.`)
       },
       getFinishJobs() {
         return toFinishJobs(targetMetas, targetsRef.current)
@@ -270,79 +461,15 @@ export function PreviewProvider({ children }) {
           bump()
         })
       },
-      async fillFromPoint(x, y) {
-        const imageData = ensureWorkingBuffer()
-        const labs = labsRef.current
-        const { width, height } = sizeRef.current
-        const active = getActiveBuffer()
-        if (!imageData || !labs || !width) return
-        const label = active?.label || subjects[0] || "영역"
-        const px = Math.max(0, Math.min(width - 1, x))
-        const py = Math.max(0, Math.min(height - 1, y))
-        if (active) {
-          if (!active.prompts) active.prompts = []
-          active.prompts.push({ x: px, y: py, label: 1 })
-          if (active.prompts.length > 12) active.prompts.shift()
-          rememberPrompts(active)
-        }
-        bump(`${label} 경계를 인식하는 중...`)
-        setAnalyzing(true)
-        const previous = cloneMask(active?.mask || maskRef.current)
-        let extra = null
-        try {
-          const { segmentObjectAtPoints } = await loadPointSegment()
-          extra = await segmentObjectAtPoints(imageData, [{ x: px, y: py, label: 1 }], {
-            subject: label,
-            targetId: active?.id || "target-0",
-            targetIndex: active?.index ?? 0,
-          })
-        } catch (error) {
-          console.warn("point SAM failed", error)
-        } finally {
-          setAnalyzing(false)
-        }
-        let patch = extra
-        if (extra && !isSkinnyMask(extra, width, height)) {
-          patch = solidifyMask(extra, width, height)
-        } else {
-          const seed = snapWorkingPointToEdge(imageData, px, py)
-          const flood = smartFloodFill(imageData, labs, seed.x, seed.y, COLOR_TOLERANCE)
-          patch = solidifyMask(extra ? unionMask(extra, flood) : flood, width, height)
-          patch = snapMaskToEdges(imageData, labs, patch, 5)
-          patch = smoothMask(patch, width, height)
-          if (isSkinnyMask(patch, width, height)) {
-            patch = solidifyMask(unionMask(patch, flood), width, height)
-          }
-        }
-        let shared = 0
-        let patchCount = 0
-        for (let i = 0; i < patch.length; i++) {
-          if (patch[i] < 24) continue
-          patchCount++
-          if (previous[i] >= 24) shared++
-        }
-        const sameSurface = patchCount > 0 && shared / patchCount >= 0.22
-        const next = sameSurface || !maskHasSelection(previous) ? unionMask(previous, patch) : patch
-        fillHoles(next, width, height)
-        if (active && !sameSurface && maskHasSelection(previous)) {
-          active.prompts = [{ x: px, y: py, label: 1 }]
-          rememberPrompts(active)
-        }
-        if (active) {
-          active.mask = next
-          active.paint = emptyMask(next.length)
-          for (const other of targetsRef.current) {
-            if (other.id !== active.id) subtractMask(other.mask, next)
-          }
-        } else {
-          maskRef.current = next
-          paintRef.current = emptyMask(next.length)
-        }
-        bump(
-          sameSurface || !maskHasSelection(previous)
-            ? `${label} 면을 원근에 맞춰 잡았습니다. 텍스처가 그 면을 따라 붙습니다.`
-            : `${label} 면을 새로 잡았습니다. 텍스처가 그 면을 따라 붙습니다.`,
-        )
+      fillFromPoint(x, y) {
+        const job = fillChainRef.current.then(() => maskOpsRef.current.addClickPoint(x, y))
+        fillChainRef.current = job.catch(() => {})
+        return job
+      },
+      undoClickPoint() {
+        const job = fillChainRef.current.then(() => maskOpsRef.current.undoLastClick())
+        fillChainRef.current = job.catch(() => {})
+        return job
       },
       async smartFill() {
         const message = completeFromCurrentMask()
@@ -424,6 +551,7 @@ export function PreviewProvider({ children }) {
           active.mask = emptyMask(n)
           active.paint = emptyMask(n)
           active.prompts = []
+          active.maskHistory = []
         }
         maskRef.current = emptyMask(n)
         paintRef.current = emptyMask(n)
@@ -447,7 +575,30 @@ export function PreviewProvider({ children }) {
         setAppliedColor(null)
         setAppliedTexture(null)
         setLivePreview(true)
-        bump("영역을 초기화했습니다. 가구를 다시 지정하세요.")
+        bump("이 영역의 마스크와 마감을 비웠습니다.")
+      },
+      resetStyle() {
+        const active = getActiveBuffer()
+        const id = active?.id || activeTargetId
+        setTargetMetas((current) =>
+          current.map((meta) =>
+            meta.id === id
+              ? {
+                  ...meta,
+                  color: null,
+                  texture: null,
+                  appliedColor: null,
+                  appliedTexture: null,
+                }
+              : meta,
+          ),
+        )
+        setColorState(null)
+        setTextureState(null)
+        setAppliedColor(null)
+        setAppliedTexture(null)
+        setLivePreview(true)
+        bump("이 영역의 색과 필름을 비웠습니다. 선택한 영역은 그대로입니다.")
       },
       resetMask() {
         const { width, height } = sizeRef.current
@@ -457,6 +608,7 @@ export function PreviewProvider({ children }) {
           active.mask = emptyMask(n)
           active.paint = emptyMask(n)
           active.prompts = []
+          active.maskHistory = []
         }
         maskRef.current = emptyMask(n)
         paintRef.current = emptyMask(n)
@@ -466,7 +618,7 @@ export function PreviewProvider({ children }) {
         setAppliedColor(null)
         setAppliedTexture(null)
         setLivePreview(true)
-        bump("영역을 초기화했습니다. 가구를 다시 지정하세요.")
+        bump("이 영역의 마스크와 마감을 비웠습니다.")
       },
       commitSimulation() {
         setTargetMetas((current) =>
@@ -539,6 +691,12 @@ export function PreviewProvider({ children }) {
           toFinishJobs(targetMetas, targetsRef.current),
         )
       },
+      startProcessing(message) {
+        processingOpsRef.current.start(message)
+      },
+      stopProcessing() {
+        processingOpsRef.current.stop()
+      },
       async loadFile(file) {
         const isImage =
           (file.type && file.type.startsWith("image/")) ||
@@ -546,40 +704,49 @@ export function PreviewProvider({ children }) {
         if (!isImage) {
           throw new Error("이미지 파일만 업로드할 수 있습니다.")
         }
-        const source = await loadImageSource(file)
-        const { width: sourceWidth, height: sourceHeight } = sourceSize(source)
-        if (!sourceWidth || !sourceHeight) {
-          disposeImageSource(source)
-          throw new Error("사진을 읽었지만 화면에 그릴 수 없습니다. JPG/PNG로 다시 올려 주세요.")
-        }
-        disposeImageSource(sourceRef.current)
-        sourceRef.current = source
-        imageDataRef.current = null
-        labsRef.current = null
-        maskRef.current = emptyMask(1)
-        paintRef.current = emptyMask(1)
-        sizeRef.current = { width: 0, height: 0 }
-        ensureWorkingBuffer()
+        processingOpsRef.current.start("이미지 업로드 중...")
         try {
-          const { clearSamCache } = await loadPointSegment()
-          clearSamCache()
-        } catch {
-          // SAM cache is browser-only
+          const source = await loadImageSource(file)
+          const { width: sourceWidth, height: sourceHeight } = sourceSize(source)
+          if (!sourceWidth || !sourceHeight) {
+            disposeImageSource(source)
+            throw new Error("사진을 읽었지만 화면에 그릴 수 없습니다. JPG/PNG로 다시 올려 주세요.")
+          }
+          disposeImageSource(sourceRef.current)
+          sourceRef.current = source
+          imageDataRef.current = null
+          labsRef.current = null
+          maskRef.current = emptyMask(1)
+          paintRef.current = emptyMask(1)
+          sizeRef.current = { width: 0, height: 0 }
+          ensureWorkingBuffer()
+          try {
+            const { clearSamCache } = await loadPointSegment()
+            clearSamCache()
+          } catch {
+            // SAM cache is browser-only
+          }
+          setFileName(file.name)
+          setHasImage(true)
+          setSubjectsState([])
+          const n = Math.max(1, sizeRef.current.width * sizeRef.current.height)
+          targetsRef.current = createRegionBuffers(n)
+          setTargetMetas(createRegionMetas())
+          setActiveTargetId("region1")
+          setPromptPoints([])
+          setImageViewState(DEFAULT_IMAGE_VIEW)
+          setPeekOriginalState(false)
+          setColorState(null)
+          setTextureState(null)
+          setAppliedColor(null)
+          setAppliedTexture(null)
+          setLivePreview(true)
+          warmSegmentation()
+          bump("영역 1이 선택되어 있습니다. 면을 터치하면 이 영역에만 마스크가 쌓입니다.")
+          await waitForPaint()
+        } finally {
+          processingOpsRef.current.stop()
         }
-        setFileName(file.name)
-        setHasImage(true)
-        setSubjectsState([])
-        targetsRef.current = []
-        setTargetMetas([])
-        setActiveTargetId("")
-        setPromptPoints([])
-        setColorState(null)
-        setTextureState(null)
-        setAppliedColor(null)
-        setAppliedTexture(null)
-        setLivePreview(true)
-        warmSegmentation()
-        bump("사진이 올라왔습니다. 바꿀 사물이나 영역을 최대 2개까지 고르세요.")
       },
     }),
     [
@@ -587,6 +754,8 @@ export function PreviewProvider({ children }) {
       hasImage,
       hasMask,
       analyzing,
+      isProcessing,
+      processingMessage,
       color,
       texture,
       appliedColor,
@@ -594,6 +763,8 @@ export function PreviewProvider({ children }) {
       livePreview,
       hint,
       promptPoints,
+      imageView,
+      peekOriginal,
       subjects,
       targetMetas,
       activeTargetId,

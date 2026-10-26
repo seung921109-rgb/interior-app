@@ -3,11 +3,13 @@
 import Link from "next/link"
 import { Suspense, useRef } from "react"
 import { PencilLine } from "lucide-react"
+import CompareButton from "@/components/CompareButton"
+import RegionBar from "@/components/RegionBar"
+import ResetAreaButton from "@/components/ResetAreaButton"
 import ConvertButton from "@/components/ConvertButton"
 import FinishPicker from "@/components/FinishPicker"
 import PreviewStage from "@/components/ClientPreviewStage"
 import RestoreOriginalButton from "@/components/RestoreOriginalButton"
-import TargetSwitcher from "@/components/TargetSwitcher"
 import WorkArea from "@/components/WorkArea"
 import { usePreview } from "@/context/PreviewContext"
 import { pointerToWorkingPoint } from "@/lib/canvas"
@@ -27,7 +29,10 @@ export default function PalettePage() {
     current.prepareFrame()
     const { width, height } = current.getSize()
     if (!width || !height) return null
-    return pointerToWorkingPoint(event, event.currentTarget, width, height, { fit: "contain" })
+    return pointerToWorkingPoint(event, event.currentTarget, width, height, {
+      fit: "contain",
+      view: current.imageView,
+    })
   }
 
   function onPointerDown(event) {
@@ -53,7 +58,6 @@ export default function PalettePage() {
     const point = tapPoint(event) || start
     if (!point) return
     const current = previewRef.current
-    if (!current.subjects?.length) current.setSubjects(["벽"])
     void current.fillFromPoint(point.x, point.y)
   }
 
@@ -86,9 +90,10 @@ export default function PalettePage() {
             enabled={preview.hasImage && !preview.analyzing}
             banner={
               preview.hasMask
-                ? "다른 면을 터치하면 텍스처가 다시 붙습니다"
-                : "벽이나 가구를 터치하세요"
+                ? "영역 버튼을 바꾼 뒤 다른 색이나 필름을 고르면 그 면만 바뀝니다"
+                : "영역 1에 면을 터치하세요"
             }
+            drawTool="tap"
             onPointerDown={onPointerDown}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
@@ -100,26 +105,23 @@ export default function PalettePage() {
               <FinishPicker layout="rail" />
             </div>
           </div>
-          {preview.targets?.length ? (
-            <div className="pointer-events-none absolute inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-[6] flex justify-start px-2 pr-[5.6rem]">
-              <div className="pointer-events-auto">
-                <TargetSwitcher
-                  tone="dark"
-                  targets={preview.targets}
-                  activeTargetId={preview.activeTargetId}
-                  onSelect={(id) => preview.setActiveTarget(id)}
-                />
-              </div>
-            </div>
-          ) : null}
         </div>
 
         <div className="shrink-0 space-y-1.5 border-t border-white/10 bg-ink-900 px-2 pt-2 pb-[max(0.55rem,env(safe-area-inset-bottom))]">
           {preview.hasImage && !preview.hasMask ? (
             <p className="text-center text-[11px] text-white/70">
-              벽이나 가구를 터치하면 그 면을 잡습니다.
+              선택한 영역에 면을 터치한 뒤 색이나 필름을 고르세요.
             </p>
           ) : null}
+          <RegionBar />
+          <div className="grid grid-cols-2 gap-1.5">
+            <CompareButton className="min-h-9 w-full bg-white/10 text-[10px] text-white" />
+            <ResetAreaButton
+              scope="finish"
+              label="초기화"
+              className="min-h-9 w-full border-white/15 bg-white/10 text-[10px] text-white enabled:active:bg-white/16"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-1.5">
             <Link
               href="/"
